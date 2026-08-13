@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Choggo</title>
+<style>
+  body { margin:0; font-family: -apple-system, sans-serif; background:#0d0d12; color:#eee;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh; text-align:center; padding:20px; box-sizing:border-box; }
+  h1 { font-size:2rem; margin-bottom:0; color:#7bdcff; }
+  p.sub { color:#888; margin-top:4px; }
+  #micBtn { width:140px; height:140px; border-radius:50%; border:none;
+    background:radial-gradient(circle at 30% 30%, #4fc3f7, #0288d1); color:white; font-size:1rem;
+    box-shadow:0 0 25px rgba(79,195,247,0.5); cursor:pointer; margin:25px; transition:transform .15s; }
+  #micBtn.awake { animation:pulse 1s infinite; background:radial-gradient(circle at 30% 30%, #ff5252, #b71c1c); }
+  #micBtn.idle { background:radial-gradient(circle at 30% 30%, #66bb6a, #2e7d32); }
+  @keyframes pulse { 0%{transform:scale(1);} 50%{transform:scale(1.08);} 100%{transform:scale(1);} }
+  #status { color:#aaa; min-height:20px; margin-bottom:10px; font-size:0.9rem; }
+  #log { width:100%; max-width:420px; max-height:35vh; overflow-y:auto; background:#16161d;
+    border-radius:12px; padding:14px; text-align:left; font-size:0.9rem; }
+  .you { color:#7bdcff; margin:6px 0; }
+  .choggo { color:#c9ffb0; margin:6px 0 14px; }
+  .toggle { margin-top:14px; font-size:0.85rem; color:#888; }
+  .toggle button { background:#222; color:#ccc; border:1px solid #444; border-radius:8px; padding:6px 12px; margin-left:6px; }
+</style>
+</head>
+<body>
+
+<h1>🐾 Choggo</h1>
+<p class="sub">Say "Hey Choggo" to wake me</p>
+<button id="micBtn" class="idle">Tap to start listening</button>
+<div id="status">Not listening yet</div>
+<div id="log"></div>
+<div class="toggle">
+  Online AI fallback:
+  <button id="toggleAI">OFF</button>
+</div>
+
+<script>
+const micBtn = document.getElementById('micBtn');
+const statusEl = document.getElementById('status');
+const logEl = document.getElementById('log');
+const toggleAI = document.getElementById('toggleAI');
+
+let aiEnabled = false;
+let awake = false;
+let listeningActive = false;
+
+toggleAI.onclick = () => {
+  aiEnabled = !aiEnabled;
+  toggleAI.textContent = aiEnabled ? 'ON' : 'OFF';
+};
+
+function say(text) {
+  const u = new SpeechSynthesisUtterance(text);
+  speechSynthesis.speak(u);
+}
+
+function logLine(who, text) {
+  const div = document.createElement('div');
+  div.className = who === 'you' ? 'you' : 'choggo';
+  div.textContent = (who === 'you' ? 'You: ' : 'Choggo: ') + text;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ---- Offline rule-based command parser ----
+function handleCommandOffline(text) {
+  const t = text.toLowerCase();
+  if (t.includes('time')) {
+    return `It's ${new Date().toLocaleTimeString()}`;
+  }
+  if (t.includes('date') || t.includes('today')) {
+    return `Today is ${new Date().toLocaleDateString(undefined,{weekday:'long',year:'numeric',month:'long',day:'numeric'})}`;
+  }
+  if (t.startsWith('open ') || t.includes('search for')) {
+    const query = t.replace('open', '').replace('search for', '').trim();
+    window.open('https://www.google.com/search?q=' + encodeURIComponent(query), '_blank');
+    return `Opening search for ${query}`;
+  }
+  if (t.includes('joke')) {
+    return "Why don't skeletons fight each other? They don't have the guts.";
+  }
+  if (t.includes('hello') || t.includes('hi')) {
+    return "Hey! I'm Choggo, ready when you are.";
+  }
+  return null;
+}
+
+// ---- Online AI fallback (placeholder endpoint) ----
+async function handleCommandOnline(text) {
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 200,
+        messages: [{ role: 'user', content: `You are Choggo, a personal voice assistant. Respond briefly and helpfully to this spoken command: "${text}"` }]
+      })
+    });
+    const data = await response.json();
+    return data.content?.[0]?.text || "I couldn't process that online either.";
+  } catch (e) {
+    return "I'm offline right now and didn't recognize that command.";
+  }
+}
+
+async function processTranscript(text) {
+  logLine('you', text);
+  let responseText = handleCommandOffline(text);
+  if (!responseText) {
+    if (aiEnabled && navigator.onLine) {
+      responseText = await handleCommandOnline(text);
+    } else {
+      responseText = "I didn't recognize that command yet.";
+    }
+  }
+  logLine('choggo', responseText);
+  say(responseText);
+}
+
+// ---- Speech recognition: continuous wake-word listening ----
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition;
+
+if (SpeechRecognition) {
+  recognition = new SpeechRecognition();
+  recognition.lang = 'en-US';
+  recognition.continuous = true;
+  recognition.interimResults = false;
+
+  recognition.onresult = (event) => {
+    const last = event.results[event.results.length - 1];
+    const transcript = last[0].transcript.trim();
+    const lower = transcript.toLowerCase();
+
+    if (!awake) {
+      if (lower.includes('hey choggo') || lower.includes('choggo')) {
+        awake = true;
+        micBtn.classList.add('awake');
+        micBtn.classList.remove('idle');
+        statusEl.textContent = 'Woke up — listening for your command...';
+        say("Yes?");
+      }
+    } else {
+      awake = false;
+      micBtn.classList.remove('awake');
+      micBtn.classList.add('idle');
+      statusEl.textContent = 'Listening for "Hey Choggo"...';
+      processTranscript(transcript);
+    }
+  };
+
+  recognition.onerror = (event) => {
+    statusEl.textContent = 'Error: ' + event.error;
+  };
+
+  recognition.onend = () => {
+    if (listeningActive) {
+      recognition.start(); // auto-restart to stay continuously listening
+    }
+  };
+} else {
+  statusEl.textContent = 'Speech recognition not supported in this browser';
+}
+
+micBtn.addEventListener('click', () => {
+  if (!recognition) return;
+  if (!listeningActive) {
+    listeningActive = true;
+    recognition.start();
+    statusEl.textContent = 'Listening for "Hey Choggo"...';
+    micBtn.textContent = 'Listening...';
+  } else {
+    listeningActive = false;
+    recognition.stop();
+    awake = false;
+    micBtn.classList.remove('awake');
+    micBtn.classList.add('idle');
+    micBtn.textContent = 'Tap to start listening';
+    statusEl.textContent = 'Stopped';
+  }
+});
+</script>
+</body>
+</html>
